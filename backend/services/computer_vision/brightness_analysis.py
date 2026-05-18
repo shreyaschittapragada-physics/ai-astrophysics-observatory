@@ -7,200 +7,201 @@ import os
 
 
 # =========================
-# PROJECT PATH CONFIG
+# BRIGHTNESS ANALYSIS MODULE
 # =========================
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+def analyze_brightness(image_path, output_log=None, show_plots=True):
 
-PROJECT_ROOT = os.path.abspath(
-    os.path.join(BASE_DIR, "../../../")
-)
+    # =========================
+    # LOAD IMAGE SAFELY
+    # =========================
 
-IMAGE_PATH = os.path.join(
-    PROJECT_ROOT,
-    "datasets",
-    "sky_images",
-    "sky.jpg"
-)
+    img = cv2.imread(image_path)
 
-OUTPUT_LOG = os.path.join(
-    PROJECT_ROOT,
-    "logs",
-    "brightness_log.csv"
-)
+    if img is None:
+        raise FileNotFoundError(
+            f"Image not found at: {image_path}"
+        )
 
+    # =========================
+    # CONVERT TO GRAYSCALE
+    # =========================
 
-# =========================
-# LOAD IMAGE SAFELY
-# =========================
+    gray = cv2.cvtColor(
+        img,
+        cv2.COLOR_BGR2GRAY
+    )
 
-img = cv2.imread(IMAGE_PATH)
+    # =========================
+    # REGION OF INTEREST
+    # Remove noisy edges
+    # =========================
 
-if img is None:
-    print(f"❌ ERROR: Image not found")
-    print(f"📍 Checked path: {IMAGE_PATH}")
-    exit()
+    h, w = gray.shape
 
+    roi = gray[
+        int(h * 0.1):int(h * 0.9),
+        int(w * 0.1):int(w * 0.9)
+    ]
 
-# =========================
-# CONVERT TO GRAYSCALE
-# =========================
+    # =========================
+    # NOISE REDUCTION
+    # =========================
 
-gray = cv2.cvtColor(
-    img,
-    cv2.COLOR_BGR2GRAY
-)
+    roi_blur = cv2.GaussianBlur(
+        roi,
+        (5, 5),
+        0
+    )
 
+    # =========================
+    # ANALYSIS
+    # =========================
 
-# =========================
-# REGION OF INTEREST
-# Remove edges/noise
-# =========================
+    mean_brightness = np.mean(roi_blur)
 
-h, w = gray.shape
+    std_brightness = np.std(roi_blur)
 
-roi = gray[
-    int(h * 0.1):int(h * 0.9),
-    int(w * 0.1):int(w * 0.9)
-]
+    hist = cv2.calcHist(
+        [roi_blur],
+        [0],
+        None,
+        [256],
+        [0, 256]
+    )
 
+    timestamp = datetime.now()
 
-# =========================
-# NOISE REDUCTION
-# =========================
+    # =========================
+    # SKY QUALITY CLASSIFIER
+    # =========================
 
-roi_blur = cv2.GaussianBlur(
-    roi,
-    (5, 5),
-    0
-)
+    if mean_brightness < 50:
+        sky_quality = "Excellent"
 
+    elif mean_brightness < 100:
+        sky_quality = "Good"
 
-# =========================
-# ANALYSIS
-# =========================
+    elif mean_brightness < 160:
+        sky_quality = "Moderate"
 
-mean_brightness = np.mean(roi_blur)
-std_brightness = np.std(roi_blur)
+    else:
+        sky_quality = "Poor"
 
-hist = cv2.calcHist(
-    [roi_blur],
-    [0],
-    None,
-    [256],
-    [0, 256]
-)
+    # =========================
+    # CSV LOGGING
+    # =========================
 
-timestamp = datetime.now()
+    if output_log is not None:
 
+        os.makedirs(
+            os.path.dirname(output_log),
+            exist_ok=True
+        )
 
-# =========================
-# SKY QUALITY CLASSIFIER
-# =========================
+        file_exists = os.path.isfile(output_log)
 
-if mean_brightness < 50:
-    sky_quality = "Excellent"
+        with open(
+            output_log,
+            "a",
+            newline=""
+        ) as f:
 
-elif mean_brightness < 100:
-    sky_quality = "Good"
+            writer = csv.writer(f)
 
-elif mean_brightness < 160:
-    sky_quality = "Moderate"
+            if not file_exists:
+                writer.writerow([
+                    "timestamp",
+                    "mean_brightness",
+                    "std_dev",
+                    "sky_quality"
+                ])
 
-else:
-    sky_quality = "Poor"
+            writer.writerow([
+                timestamp.strftime("%Y-%m-%d %H:%M:%S"),
+                round(mean_brightness, 3),
+                round(std_brightness, 3),
+                sky_quality
+            ])
 
+    # =========================
+    # VISUALIZATION
+    # =========================
 
-# =========================
-# OUTPUT
-# =========================
+    if show_plots:
 
-print("\n🌌 SKY BRIGHTNESS ANALYSIS")
-print("----------------------------")
-print(
-    "Time:",
-    timestamp.strftime("%Y-%m-%d %H:%M:%S")
-)
+        plt.figure(figsize=(10, 4))
 
-print(
-    "Mean Brightness:",
-    round(mean_brightness, 3)
-)
+        # Processed Sky Image
+        plt.subplot(1, 2, 1)
 
-print(
-    "Noise (Std Dev):",
-    round(std_brightness, 3)
-)
+        plt.imshow(
+            roi_blur,
+            cmap="gray"
+        )
 
-print(
-    "Sky Quality:",
-    sky_quality
-)
+        plt.title("Sky ROI (Processed)")
+        plt.axis("off")
 
+        # Histogram
+        plt.subplot(1, 2, 2)
 
-# =========================
-# SAVE DATA (CSV LOGGING)
-# =========================
+        plt.plot(hist)
 
-os.makedirs(
-    os.path.dirname(OUTPUT_LOG),
-    exist_ok=True
-)
+        plt.title("Brightness Histogram")
+        plt.xlabel("Pixel Intensity")
+        plt.ylabel("Frequency")
 
-file_exists = os.path.isfile(OUTPUT_LOG)
+        plt.tight_layout()
+        plt.show()
 
-with open(
-    OUTPUT_LOG,
-    "a",
-    newline=""
-) as f:
+    # =========================
+    # RETURN RESULTS
+    # =========================
 
-    writer = csv.writer(f)
-
-    if not file_exists:
-        writer.writerow([
-            "timestamp",
-            "mean_brightness",
-            "std_dev",
-            "sky_quality"
-        ])
-
-    writer.writerow([
-        timestamp.strftime("%Y-%m-%d %H:%M:%S"),
-        round(mean_brightness, 3),
-        round(std_brightness, 3),
-        sky_quality
-    ])
+    return {
+        "timestamp": timestamp.strftime("%Y-%m-%d %H:%M:%S"),
+        "mean_brightness": round(mean_brightness, 3),
+        "std_dev": round(std_brightness, 3),
+        "sky_quality": sky_quality
+    }
 
 
 # =========================
-# VISUALIZATION
+# STANDALONE TESTING
 # =========================
 
-plt.figure(figsize=(10, 4))
+if __name__ == "__main__":
 
+    BASE_DIR = os.path.dirname(
+        os.path.abspath(__file__)
+    )
 
-# Processed Sky Image
-plt.subplot(1, 2, 1)
+    PROJECT_ROOT = os.path.abspath(
+        os.path.join(BASE_DIR, "../../../")
+    )
 
-plt.imshow(
-    roi_blur,
-    cmap="gray"
-)
+    IMAGE_PATH = os.path.join(
+        PROJECT_ROOT,
+        "datasets",
+        "sky_images",
+        "sky.jpg"
+    )
 
-plt.title("Sky ROI (Processed)")
-plt.axis("off")
+    OUTPUT_LOG = os.path.join(
+        PROJECT_ROOT,
+        "logs",
+        "brightness_log.csv"
+    )
 
+    results = analyze_brightness(
+        image_path=IMAGE_PATH,
+        output_log=OUTPUT_LOG,
+        show_plots=True
+    )
 
-# Histogram
-plt.subplot(1, 2, 2)
+    print("\n🌌 SKY BRIGHTNESS ANALYSIS")
+    print("----------------------------")
 
-plt.plot(hist)
-
-plt.title("Brightness Histogram")
-plt.xlabel("Pixel Intensity")
-plt.ylabel("Frequency")
-
-
-plt.tight_layout()
-plt.show()
+    for key, value in results.items():
+        print(f"{key}: {value}")
