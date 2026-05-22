@@ -4,12 +4,11 @@ from fastapi.responses import HTMLResponse
 import datetime
 import sqlite3
 import numpy as np
+import cv2
 from PIL import Image
 import io
 
-# Aligned with your exact VS Code Explorer paths
 from backend.services.tracking.iss_tracker import ISSTracker
-from backend.services.computer_vision import star_detection
 
 app = FastAPI(title="AI Astrophysics Core Engine - V1.1-Tracking-Core", version="1.1")
 
@@ -42,15 +41,8 @@ init_db()
 
 try:
     tracker = ISSTracker()
-    if hasattr(star_detection, "StarDetector"):
-        detector = star_detection.StarDetector(sigma_threshold=3.0)
-    elif hasattr(star_detection, "StarDetection"):
-        detector = star_detection.StarDetection(sigma_threshold=3.0)
-    else:
-        detector = star_detection
 except Exception:
     tracker = None
-    detector = None
 
 @app.get("/api/satellite/telemetry")
 def get_telemetry(
@@ -65,7 +57,6 @@ def get_telemetry(
         pos = tracker.get_current_position(target)
         angles = tracker.get_look_angles(target, lat, lon, alt)
         
-        # FIX: Clean and explicitly typecast NumPy types to standard Python primitives
         clean_telemetry = {
             "latitude": float(pos.get("latitude", 0.0)),
             "longitude": float(pos.get("longitude", 0.0)),
@@ -79,7 +70,6 @@ def get_telemetry(
             "last_pulse": datetime.datetime.now().strftime("%H:%M:%S")
         }
         
-        # Log to local history SQLite cache
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
         cursor.execute(
@@ -114,23 +104,53 @@ def get_passes(
     except Exception:
         return []
 
+# REFACTORED SPRINT 3 STREAMING ENGINE ENDPOINT
 @app.post("/api/cv/streaming-frame")
 async def analyze_streaming_frame(file: UploadFile = File(...)):
-    if not detector:
-        raise HTTPException(status_code=503, detail="CV Engine offline")
     try:
+        # Read the raw web bytes directly from memory
         contents = await file.read()
-        image = Image.open(io.BytesIO(contents)).convert("L")
-        img_array = np.array(image)
         
-        if hasattr(detector, "process_feed"):
-            return detector.process_feed(img_array)
-        elif hasattr(detector, "process_image"):
-            return detector.process_image(img_array)
-        else:
-            raise HTTPException(status_code=500, detail="Star detection process target function missing")
+        # Unpack directly into an OpenCV-ready NumPy image matrix array
+        np_img = np.frombuffer(contents, np.uint8)
+        gray = cv2.imdecode(np_img, cv2.IMREAD_GRAYSCALE)
+        
+        if gray is None:
+            raise HTTPException(status_code=400, detail="Invalid image encoding data received")
+
+        # Your exact CV pipeline analysis logic running fully in-memory
+        blur = cv2.GaussianBlur(gray, (5, 5), 0)
+        _, threshold = cv2.threshold(blur, 185, 255, cv2.THRESH_BINARY)
+        contours, _ = cv2.findContours(threshold, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        
+        star_count = 0
+        star_areas = []
+        brightest_star = 0
+        
+        for contour in contours:
+            area = cv2.contourArea(contour)
+            if 2 < area < 20:
+                x, y, w, h = cv2.boundingRect(contour)
+                center_x = x + w // 2
+                center_y = y + h // 2
+                
+                star_areas.append(area)
+                brightness = gray[center_y, center_x]
+                if brightness > brightest_star:
+                    brightest_star = int(brightness)
+                star_count += 1
+                
+        average_star_area = round(float(np.mean(star_areas)), 3) if star_areas else 0.0
+        
+        return {
+            "status": "SUCCESS",
+            "stars_detected": star_count,
+            "brightest_star": brightest_star,
+            "average_star_area": average_star_area,
+            "engine_handshake": "STREAMING_VALIDATED"
+        }
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=f"CV Engine Error: {str(e)}")
 
 @app.get("/", response_class=HTMLResponse)
 def serve_dashboard():
