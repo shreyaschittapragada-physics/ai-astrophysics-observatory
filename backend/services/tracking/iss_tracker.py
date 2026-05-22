@@ -1,129 +1,122 @@
+﻿import os
 import datetime
-import os
-from skyfield.api import Loader
-import astropy.units as u
-from astropy.coordinates import EarthLocation, AltAz, SkyCoord
-from astropy.time import Time
+import urllib.request
+from skyfield.api import load, wgs84, EarthSatellite
 
-class SpaceTrackerEngine(object):
-    def __init__(self, cache_hours: int = 3):
-        self.data_dir = os.path.join(os.path.dirname(__file__), "data")
-        os.makedirs(self.data_dir, exist_ok=True)
+class ISSTracker:
+    def __init__(self):
+        self.ts = load.timescale()
+        self.cache_dir = os.path.join(os.getcwd(), "backend", "cache")
+        os.makedirs(self.cache_dir, exist_ok=True)
         
-        self.loader = Loader(self.data_dir, verbose=False)
-        self.ts = self.loader.timescale()
-        self.cache_hours = cache_hours
-        
-        self.satellite_mappings = {
-            "iss": "ISS (ZARYA)",
-            "hubble": "HST",
-            "noaa": "NOAA 19",
-            "starlink": "STARLINK"
-        }
-        
-        self.satellites_cache = {}
-        self._initialize_database()
-
-    def _initialize_database(self):
-        urls = {
-            "stations": "https://celestrak.org/NORAD/elements/gp.php?GROUP=stations&FORMAT=tle",
-            "science": "https://celestrak.org/NORAD/elements/gp.php?GROUP=science&FORMAT=tle",
-            "weather": "https://celestrak.org/NORAD/elements/gp.php?GROUP=weather&FORMAT=tle",
-            "starlink": "https://celestrak.org/NORAD/elements/gp.php?GROUP=starlink&FORMAT=tle"
+        # Mapping CelesTrak NORAD IDs for live downloads
+        self.satellite_ids = {
+            "iss": {"id": "25544", "name": "ISS (ZARYA)"},
+            "tiangong": {"id": "48274", "name": "TIANGONG (CSS)"},
+            "hubble": {"id": "20580", "name": "HUBBLE SPACE TELESCOPE"}
         }
 
-        for group, url in urls.items():
-            try:
-                filename = f"{group}.tle"
-                filepath = os.path.join(self.data_dir, filename)
-                
-                force_reload = True
-                if os.path.exists(filepath):
-                    days_limit = float(self.cache_hours) / 24.0
-                    if self.loader.days_old(filename) < days_limit:
-                        force_reload = False
-                
-                sats_list = self.loader.tle_file(url, filename=filename, reload=force_reload)
-                
-                for sat in list(sats_list):
-                    if sat and hasattr(sat, 'name') and sat.name:
-                        self.satellites_cache[str(sat.name).strip()] = sat
-                        
-            except Exception as e:
-                print(f"?? Error parsing group '{group}': {str(e)}")
+    def _get_live_tle(self, sat_key: str):
+        """Fetches live TLE from CelesTrak or reads from local cache if fresh."""
+        sat_info = self.satellite_ids.get(sat_key.lower(), self.satellite_ids["iss"])
+        cache_file = os.path.join(self.cache_dir, f"{sat_key}_tle.txt")
+        
+        # Check if cache file exists and is less than 24 hours old
+        if os.path.exists(cache_file):
+            file_age = datetime.datetime.now() - datetime.datetime.fromtimestamp(os.path.getmtime(cache_file))
+            if file_age.total_seconds() < 86400:
+                with open(cache_file, "r") as f:
+                    lines = f.read().splitlines()
+                if len(lines) >= 2:
+                    return lines[0], lines[1], sat_info["name"]
 
-    def get_satellite_position(self, satellite_slug: str, obs_lat: float = None, obs_lon: float = None, obs_alt_m: float = 0.0):
-        slug = str(satellite_slug).lower()
-        if slug not in self.satellite_mappings:
-            raise ValueError(f"Satellite '{satellite_slug}' not supported.")
+        # Fetch fresh data from CelesTrak if cache expired or missing
+        try:
+            url = f"https://celestrak.org/NORAD/elements/gp.php?CATNR={sat_info['id']}&FORMAT=TLE"
+            headers = {'User-Agent': 'Mozilla/5.0'}
+            req = urllib.request.Request(url, headers=headers)
+            with urllib.request.urlopen(req, timeout=10) as response:
+                content = response.read().decode('utf-8').splitlines()
             
-        target_name = self.satellite_mappings[slug]
-        satellite = None
-        
-        for name in list(self.satellites_cache.keys()):
-            if target_name in name:
-                satellite = self.satellites_cache[name]
-                target_name = name
-                break
-                
-        if not satellite:
-            raise ValueError(f"TLE data for '{target_name}' not found in cache.")
+            if len(content) >= 3:
+                l1, l2 = content[1].strip(), content[2].strip()
+                with open(cache_file, "w") as f:
+                    f.write(f"{l1}\n{l2}")
+                return l1, l2, sat_info["name"]
+        except Exception as e:
+            print(f"TLE network fetch failed, using internal fallback: {e}")
+            
+        # Resilient fallback profiles if internet is down
+        fallbacks = {
+            "iss": ("1 25544U 98067A   26142.22818981  .00014022  00000-0  24996-3 0  9993", "2 25544  51.6418 132.8831 0001819  86.1343  51.7820 15.49520847568551"),
+            "tiangong": ("1 48274U 21035A   26142.16480434  .00011537  00000-0  13511-3 0  9997", "2 48274  41.4721 154.5512 0001928  62.1147 288.1130 15.59765231284710"),
+            "hubble": ("1 20580U 90037B   26141.80211568  .00002104  00000-0  14502-3 0  9998", "2 20580  28.4681  22.1145 0002419 114.1512 281.1415 15.06411512961120")
+        }
+        l1, l2 = fallbacks.get(sat_key.lower(), fallbacks["iss"])
+        return l1, l2, sat_info["name"]
 
+    def get_satellite_object(self, key: str):
+        l1, l2, name = self._get_live_tle(key)
+        return EarthSatellite(l1, l2, name, self.ts), name
+
+    def get_current_position(self, sat_key: str = "iss"):
+        sat, sat_name = self.get_satellite_object(sat_key)
         now = self.ts.now()
-        geocentric = satellite.at(now)
+        geocentric = sat.at(now)
         subpoint = geocentric.subpoint()
         
         velocity_vector = geocentric.velocity.km_per_s
-        speed_km_s = (velocity_vector[0]**2 + velocity_vector[1]**2 + velocity_vector[2]**2)**0.5
-        speed_km_h = speed_km_s * 3600
+        speed_km_h = (velocity_vector[0]**2 + velocity_vector[1]**2 + velocity_vector[2]**2)**0.5 * 3600
 
-        # Base telemetry response
-        sat_lat = subpoint.latitude.degrees
-        sat_lon = subpoint.longitude.degrees
-        sat_alt = subpoint.elevation.km
-
-        response = {
-            "satellite_name": str(target_name),
-            "latitude": round(sat_lat, 4),
-            "longitude": round(sat_lon, 4),
-            "altitude_km": round(sat_alt, 2),
+        return {
+            "satellite_name": sat_name,
+            "latitude": round(subpoint.latitude.degrees, 4),
+            "longitude": round(subpoint.longitude.degrees, 4),
+            "altitude_km": round(subpoint.elevation.km, 2),
             "velocity_km_h": round(speed_km_h, 2),
-            "timestamp": datetime.datetime.now().isoformat(),
-            "astronomy_data": None
+            "timestamp": datetime.datetime.now().isoformat()
         }
 
-        # If observer coordinates are provided, perform advanced Astropy computations
-        if obs_lat is not None and obs_lon is not None:
-            # 1. Define time context for Astropy
-            astro_time = Time(datetime.datetime.utcnow())
-            
-            # 2. Establish ground observer frame
-            observer_location = EarthLocation(lat=obs_lat*u.deg, lon=obs_lon*u.deg, height=obs_alt_m*u.m)
-            altaz_frame = AltAz(obstime=astro_time, location=observer_location)
-            
-            # 3. Establish satellite sky position point coordinate
-            sat_coord = SkyCoord(
-                lon=sat_lon*u.deg, 
-                lat=sat_lat*u.deg, 
-                distance=(6371.0 + sat_alt)*u.km, 
-                frame='geocentrictrueecliptic'
-            )
-            
-            # 4. Transform coordinate frames to find local horizon look angles
-            local_look_angles = sat_coord.transform_to(altaz_frame)
-            icrs_sky_coordinates = sat_coord.transform_to('icrs')
+    def get_look_angles(self, sat_key: str, lat: float, lon: float, alt_m: float):
+        sat, _ = self.get_satellite_object(sat_key)
+        now = self.ts.now()
+        observer = wgs84.latlon(lat, lon, elevation_m=alt_m)
+        topocentric = (sat - observer).at(now)
+        alt, az, distance = topocentric.altaz()
+        
+        return {
+            "elevation_deg": round(alt.degrees, 2),
+            "azimuth_deg": round(az.degrees, 2),
+            "range_km": round(distance.km, 2),
+            "is_above_horizon": alt.degrees > 0
+        }
 
-            response["astronomy_data"] = {
-                "observer_latitude": obs_lat,
-                "observer_longitude": obs_lon,
-                "local_altitude_deg": round(float(local_look_angles.alt.degree), 2),
-                "local_azimuth_deg": round(float(local_look_angles.az.degree), 2),
-                "right_ascension_hours": round(float(icrs_sky_coordinates.ra.hour), 4),
-                "declination_degrees": round(float(icrs_sky_coordinates.dec.degree), 4)
-            }
-
-        return response
-
-class ISSTracker(SpaceTrackerEngine):
-    def get_current_position(self):
-        return self.get_satellite_position("iss")
+    def compute_future_passes(self, sat_key: str, lat: float, lon: float, alt_m: float, days: int = 7):
+        """Computes all visible overflight vectors for the target station coordinates."""
+        sat, _ = self.get_satellite_object(sat_key)
+        observer = wgs84.latlon(lat, lon, elevation_m=alt_m)
+        
+        t0 = self.ts.now()
+        t1 = self.ts.utc(t0.utc_datetime() + datetime.timedelta(days=days))
+        
+        # Find horizon crossings (min elevation threshold 10 degrees for clear visibility)
+        times, events = sat.find_events(observer, t0, t1, altitude_degrees=10.0)
+        
+        passes = []
+        current_pass = {}
+        
+        for t, event in zip(times, events):
+            # Event 0: Rise, 1: Peak Culmination, 2: Set
+            if event == 0:
+                current_pass = {"rise_time": t.utc_datetime().isoformat() + "Z"}
+            elif event == 1 and current_pass:
+                topocentric = (sat - observer).at(t)
+                alt, az, _ = topocentric.altaz()
+                current_pass["max_elevation_deg"] = round(alt.degrees, 1)
+                current_pass["peak_azimuth_deg"] = round(az.degrees, 1)
+            elif event == 2 and current_pass:
+                current_pass["set_time"] = t.utc_datetime().isoformat() + "Z"
+                passes.append(current_pass)
+                current_pass = {}
+                
+        return passes[:5] # Return next 5 clean passes
