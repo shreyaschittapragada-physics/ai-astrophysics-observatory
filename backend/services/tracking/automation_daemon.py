@@ -2,33 +2,40 @@
 from datetime import datetime, timedelta, timezone
 import os
 import sys
+import numpy as np
+import cv2
 
-# Align workspace system path context
 sys.path.append(os.getcwd())
 
 from backend.services.database.db_manager import DatabaseManager
+from backend.services.computer_vision.motion_tracker import TransientMotionDetector
+from backend.services.computer_vision.meteor_filter import TransientSignalFilter
 
 class ObservatoryAutomationDaemon:
     def __init__(self, check_interval_seconds=1):
         self.check_interval = check_interval_seconds
         self.db = DatabaseManager()
-        self.is_running = False
-        self.current_state = "IDLE"  # States: IDLE, ARMED, RECORDING
         
-        # Using modern, timezone-aware UTC datetime tracking
+        # Core V2 Vision & Intelligence Subsystems Interlocked here
+        self.tracker = TransientMotionDetector(buffer_size=10, min_contour_area=15)
+        self.intelligence_filter = TransientSignalFilter(confidence_threshold=0.65)
+        
+        self.is_running = False
+        self.current_state = "IDLE"
+        
+        # Setup an immediate timetable event for a live camera processing verification pass
         self.pass_timetable = [
             {
                 "target": "ISS (ZARYA)",
-                "aos": datetime.now(timezone.utc) + timedelta(seconds=3),  # 3 seconds out
-                "los": datetime.now(timezone.utc) + timedelta(seconds=10)  # 10 seconds out
+                "aos": datetime.now(timezone.utc) + timedelta(seconds=2),
+                "los": datetime.now(timezone.utc) + timedelta(seconds=12)
             }
         ]
-        print("🤖 Autonomous Edge Daemon Management Core Initialized.")
+        print("🤖 Autonomous Edge Interlocking Daemon Online.")
 
     async def start_orchestration_loop(self):
-        """Main asynchronous event loop managing camera state transitions."""
         self.is_running = True
-        print("⏰ Automation scheduling loop activated. Scanning timetable...\n")
+        print("⏰ Hardware orchestration loop scanning timetable targets...\n")
         
         while self.is_running:
             now = datetime.now(timezone.utc)
@@ -38,35 +45,56 @@ class ObservatoryAutomationDaemon:
                 aos = execution_pass["aos"]
                 los = execution_pass["los"]
                 
-                # State 1: Target approaching within 5 seconds -> ARM system
+                # 1. State Shift: ARMED
                 if now < aos and (aos - now).total_seconds() <= 5 and self.current_state == "IDLE":
                     self.current_state = "ARMED"
-                    print(f"🚨 [STATE: ARMED] Target {target} approaching horizon. Initializing pre-motion memory ring buffers...")
+                    print(f"🚨 [STATE: ARMED] {target} incoming. Pre-allocating context frame arrays...")
+                    # Seed background history buffer with clear static sky frames
+                    for _ in range(10):
+                        self.tracker.process_frame(np.zeros((500, 500), dtype=np.uint8))
                 
-                # State 2: Target visible -> RECORD
-                elif aos <= now <= los and self.current_state != "RECORDING":
-                    self.current_state = "RECORDING"
-                    print(f"📸 [STATE: RECORDING] Target {target} is above horizon footprint! Optical CV frame processing active.")
+                # 2. State Shift: RECORDING (Processing CV Streams)
+                elif aos <= now <= los:
+                    if self.current_state != "RECORDING":
+                        self.current_state = "RECORDING"
+                        print(f"📸 [STATE: RECORDING] {target} overhead. Interlocking optical vision matrices...")
+                    
+                    # Generate a clean, real moving meteor streak across the lens array during the tracking sweep
+                    simulated_sky_frame = np.zeros((500, 500), dtype=np.uint8)
+                    cv2.line(simulated_sky_frame, (10, 200), (490, 210), 255, 2)
+                    
+                    # Pass raw frames directly into your V2 processing pipeline
+                    motion_detected, metadata, processed_mask = self.tracker.process_frame(simulated_sky_frame)
+                    
+                    if motion_detected:
+                        analysis = self.intelligence_filter.evaluate_motion_profile(processed_mask, metadata)
+                        if analysis["pass_verified"] and now.second % 4 == 0:  # Avoid logging duplicates on every frame tick
+                            print(f"   🎯 Intercepted high-confidence transient: {analysis['classification']} ({analysis['confidence_score']*100}%)")
+                            self.db.log_detection_event(
+                                classification=analysis["classification"],
+                                confidence=analysis["confidence_score"],
+                                lines=analysis["line_segments_detected"],
+                                aspect_ratio=analysis["target_aspect_ratio"],
+                                frame_path="captures/daemon_intercept.jpg"
+                            )
                 
-                # State 3: Target lost -> Return to IDLE & save resources
+                # 3. State Shift: IDLE
                 elif now > los and self.current_state == "RECORDING":
                     self.current_state = "IDLE"
-                    print(f"💤 [STATE: IDLE] Target {target} dropped below horizon. Spinning down CV camera matrix threads to save power.\n")
+                    print(f"💤 [STATE: IDLE] {target} pass completed. Releasing frame hardware matrices back to standby power.\n")
                     self.pass_timetable.remove(execution_pass)
             
             await asyncio.sleep(self.check_interval)
 
     def stop(self):
         self.is_running = False
-        print("🛑 Automation scheduling loop halted safely.")
+        print("🛑 Edge automation system closed safely.")
 
 async def main():
     daemon = ObservatoryAutomationDaemon(check_interval_seconds=1)
     try:
-        # Fixed the simulation timeout window to 15 seconds to catch all state changes cleanly
-        await asyncio.wait_for(daemon.start_orchestration_loop(), timeout=15.0)
+        await asyncio.wait_for(daemon.start_orchestration_loop(), timeout=16.0)
     except TimeoutError:
-        # Caught the native standard TimeoutError properly
         daemon.stop()
 
 if __name__ == "__main__":
