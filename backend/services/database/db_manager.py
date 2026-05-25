@@ -4,58 +4,59 @@ from datetime import datetime
 
 class DatabaseManager:
     def __init__(self, db_name="astronomy_history.db"):
-        current_dir = os.path.dirname(os.path.abspath(__file__))
-        self.db_path = os.path.join(current_dir, db_name)
-        self.init_database()
+        """
+        Manages local SQLite storage for archiving high-confidence 
+        satellite passes and transient tracking events.
+        """
+        # Place database file at the root of the project workspace
+        self.db_path = os.path.join(os.getcwd(), db_name)
+        self.initialize_database()
 
     def get_connection(self):
         return sqlite3.connect(self.db_path)
 
-    def init_database(self):
+    def initialize_database(self):
+        """Creates the structural tracking tables if they do not exist."""
         with self.get_connection() as conn:
             cursor = conn.cursor()
-            
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS target_passes (
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS detection_history (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    target_name TEXT NOT NULL,
-                    scheduled_start DATETIME NOT NULL,
-                    scheduled_end DATETIME NOT NULL,
-                    max_elevation REAL,
-                    status TEXT DEFAULT 'PENDING'
+                    timestamp TEXT NOT NULL,
+                    classification TEXT NOT NULL,
+                    confidence_score REAL NOT NULL,
+                    line_segments INTEGER NOT NULL,
+                    aspect_ratio REAL NOT NULL,
+                    captured_frame_path TEXT
                 )
-            """)
+            ''')
+            conn.commit()
+        print(f"🗄️ SQLite Database Manager initialized at: {self.db_path}")
+
+    def log_detection_event(self, classification: str, confidence: float, lines: int, aspect_ratio: float, frame_path=None) -> int:
+        """
+        Inserts a verified high-confidence transient anomaly record into local storage.
+        """
+        query = '''
+            INSERT INTO detection_history 
+            (timestamp, classification, confidence_score, line_segments, aspect_ratio, captured_frame_path)
+            VALUES (?, ?, ?, ?, ?, ?)
+        '''
+        timestamp_str = datetime.utcnow().isoformat()
+        
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(query, (timestamp_str, classification, confidence, lines, aspect_ratio, frame_path))
+            conn.commit()
+            inserted_id = cursor.lastrowid
             
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS cv_detections (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    pass_id INTEGER,
-                    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
-                    detection_type TEXT NOT NULL,
-                    confidence REAL,
-                    image_path TEXT,
-                    metrics_json TEXT,
-                    FOREIGN KEY (pass_id) REFERENCES target_passes(id) ON DELETE SET NULL
-                )
-            """)
-            conn.commit()
-            print(f" Foundation Database initialized successfully at: {self.db_path}")
+        print(f"💾 Event archived successfully in SQLite. Assigned Record ID: [#{inserted_id}]")
+        return inserted_id
 
-    def log_pass(self, name, start_time, end_time, max_el):
+    def fetch_all_logs(self) -> list:
+        """Queries database tracking entries for UI dashboard display ingestion."""
         with self.get_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("""
-                INSERT INTO target_passes (target_name, scheduled_start, scheduled_end, max_elevation, status)
-                VALUES (?, ?, ?, ?, 'TRACKING')
-            """, (name, start_time, end_time, max_el))
-            conn.commit()
-            return cursor.lastrowid
-
-    def log_detection(self, pass_id, det_type, confidence, img_path, metrics="{}"):
-        with self.get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute("""
-                INSERT INTO cv_detections (pass_id, detection_type, confidence, image_path, metrics_json)
-                VALUES (?, ?, ?, ?, ?)
-            """, (pass_id, det_type, confidence, img_path, metrics))
-            conn.commit()
+            cursor.execute("SELECT * FROM detection_history ORDER BY timestamp DESC")
+            rows = cursor.fetchall()
+        return rows

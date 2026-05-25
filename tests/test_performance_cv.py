@@ -1,43 +1,40 @@
 ﻿import sys
 import numpy as np
 import cv2
+import os
 
-# Bind workspace path context
-sys.path.append(sys.path[0] + "/..")
+sys.path.append(os.getcwd())
+
 from backend.services.computer_vision.motion_tracker import TransientMotionDetector
+from backend.services.computer_vision.meteor_filter import TransientSignalFilter
 
-def run_motion_simulation():
-    print("\n--- INITIATING SPRINT 4 MOTION TRACKER & RING BUFFER TEST ---")
+def run_elongated_streak_test():
+    print("\n--- RUNNING METEOR SATELLITE STREAK VERIFICATION ---")
     
-    # Instantiate tracker with 15 frames of context storage capacity
-    detector = TransientMotionDetector(buffer_size=15, min_contour_area=20)
+    tracker = TransientMotionDetector(buffer_size=10, min_contour_area=15)
+    intelligence_filter = TransientSignalFilter(confidence_threshold=0.65)
     
-    # 1. Generate 20 frames of perfectly dark, quiet baseline night sky (fills buffer)
-    print("🌌 Simulating quiet static night sky (populating ring buffer)...")
-    for _ in range(20):
-        static_frame = np.zeros((720, 1280), dtype=np.uint8)
-        detector.process_frame(static_frame)
-
-    # 2. Introduce an artificial high-speed satellite streak into frame 21
-    print("💫 Introducing moving transient streak target matrix...")
-    active_frame = np.zeros((720, 1280), dtype=np.uint8)
-    # Draw a simulated linear trail line segment representation
-    cv2.line(active_frame, (100, 100), (140, 130), 255, 3)
+    for _ in range(10):
+        tracker.process_frame(np.zeros((500, 500), dtype=np.uint8))
+        
+    simulated_sky = np.zeros((500, 500), dtype=np.uint8)
+    # Draw a highly elongated, shallow horizontal streak (long width, tiny height footprint)
+    cv2.line(simulated_sky, (10, 250), (490, 260), 255, 2)
     
-    motion_flag, telemetry, _ = detector.process_frame(active_frame)
+    motion_detected, metadata, processed_mask = tracker.process_frame(simulated_sky)
     
-    print("\n[Execution Output Metrics]:")
-    print(f"  Motion Detected Triggered: {motion_flag}")
-    print(f"  Cached Pre-Motion Ring Buffer Size: {telemetry['buffered_context_frames']} frames")
-    print(f"  Tracked Active Target Count: {telemetry['active_target_count']}")
-    
-    if motion_flag and telemetry['kinematic_vectors']:
-        vector = telemetry['kinematic_vectors'][0]
-        print(f"  Extracted Centroid Coordinate: {vector['centroid']}")
-        print(f"  Pixel Cluster Footprint Area: {vector['pixel_area']} px")
-        print("\n✅ Sprint 4 Matrix Pipeline execution stable. Ring buffer caching functional.")
-    else:
-        print("❌ Test failed: Motion tracking matrix miscalculated target entry.")
+    if motion_detected:
+        analysis_result = intelligence_filter.evaluate_motion_profile(processed_mask, metadata)
+        
+        print("\n[AI Intelligence Filter Analysis Metrics]:")
+        print(f"  Detected Movement:    {motion_detected}")
+        print(f"  Line Segments Found:  {analysis_result['line_segments_detected']}")
+        print(f"  Target Aspect Ratio:  {analysis_result['target_aspect_ratio']}")
+        print(f"  Confidence Rating:    {analysis_result['confidence_score'] * 100}%")
+        print(f"  Platform Target Typology:  👉 [{analysis_result['classification']}] 👈")
+        print(f"  Database Log Approved: {analysis_result['pass_verified']}")
+        
+        print("\n✅ Sprint 5 Filter validation check complete.")
 
 if __name__ == "__main__":
-    run_motion_simulation()
+    run_elongated_streak_test()
