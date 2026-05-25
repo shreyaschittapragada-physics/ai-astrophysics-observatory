@@ -1,41 +1,61 @@
+﻿import os
 import sqlite3
-import os
 from datetime import datetime
 
 class DatabaseManager:
     def __init__(self, db_name="astronomy_history.db"):
-        db_dir = os.path.join("backend", "services", "database")
-        os.makedirs(db_dir, exist_ok=True)
-        self.db_path = os.path.join(db_dir, db_name)
-        self.conn = sqlite3.connect(self.db_path, check_same_thread=False)
-        self.create_tables()
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        self.db_path = os.path.join(current_dir, db_name)
+        self.init_database()
 
-    def create_tables(self):
-        cursor = self.conn.cursor()
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS detections (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                timestamp TEXT NOT NULL,
-                event_type TEXT DEFAULT 'motion_detected',
-                confidence_score REAL DEFAULT 0.0,
-                saved_path TEXT,
-                v1_sat_name TEXT DEFAULT 'N/A',
-                v1_is_above_horizon BOOLEAN DEFAULT 0,
-                v2_largest_contour INTEGER
-            )
-        ''')
-        self.conn.commit()
+    def get_connection(self):
+        return sqlite3.connect(self.db_path)
 
-    def log_event(self, v2_report, v1_context=None):
-        cursor = self.conn.cursor()
-        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        saved_path = v2_report.get("metadata", {}).get("saved_path", "")
-        largest_contour = v2_report.get("metadata", {}).get("largest_contour_area", 0)
-        sat_name = v1_context.get("name", "N/A") if v1_context else "N/A"
-        is_above_horizon = bool(v1_context.get("is_above_horizon", False)) if v1_context else False
-        cursor.execute('''
-            INSERT INTO detections (timestamp, saved_path, v1_sat_name, v1_is_above_horizon, v2_largest_contour)
-            VALUES (?, ?, ?, ?, ?)
-        ''', (timestamp, saved_path, sat_name, is_above_horizon, largest_contour))
-        self.conn.commit()
-        return cursor.lastrowid
+    def init_database(self):
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS target_passes (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    target_name TEXT NOT NULL,
+                    scheduled_start DATETIME NOT NULL,
+                    scheduled_end DATETIME NOT NULL,
+                    max_elevation REAL,
+                    status TEXT DEFAULT 'PENDING'
+                )
+            """)
+            
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS cv_detections (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    pass_id INTEGER,
+                    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    detection_type TEXT NOT NULL,
+                    confidence REAL,
+                    image_path TEXT,
+                    metrics_json TEXT,
+                    FOREIGN KEY (pass_id) REFERENCES target_passes(id) ON DELETE SET NULL
+                )
+            """)
+            conn.commit()
+            print(f" Foundation Database initialized successfully at: {self.db_path}")
+
+    def log_pass(self, name, start_time, end_time, max_el):
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                INSERT INTO target_passes (target_name, scheduled_start, scheduled_end, max_elevation, status)
+                VALUES (?, ?, ?, ?, 'TRACKING')
+            """, (name, start_time, end_time, max_el))
+            conn.commit()
+            return cursor.lastrowid
+
+    def log_detection(self, pass_id, det_type, confidence, img_path, metrics="{}"):
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                INSERT INTO cv_detections (pass_id, detection_type, confidence, image_path, metrics_json)
+                VALUES (?, ?, ?, ?, ?)
+            """, (pass_id, det_type, confidence, img_path, metrics))
+            conn.commit()
