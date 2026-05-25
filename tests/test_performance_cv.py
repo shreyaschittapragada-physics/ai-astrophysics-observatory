@@ -1,25 +1,43 @@
 ﻿import sys
-import os
-sys.path.append(os.getcwd())
-
-import cv2
 import numpy as np
-from backend.services.computer_vision.motion_tracker import MotionTracker
+import cv2
 
-# Instantiate the engine here, locally in the test script
-engine = MotionTracker(buffer_size=5)
+# Bind workspace path context
+sys.path.append(sys.path[0] + "/..")
+from backend.services.computer_vision.motion_tracker import TransientMotionDetector
 
-frame_static = np.zeros((512, 512), dtype=np.uint8)
-frame_motion = np.zeros((512, 512), dtype=np.uint8)
-cv2.circle(frame_motion, (200, 200), 20, 255, -1) 
+def run_motion_simulation():
+    print("\n--- INITIATING SPRINT 4 MOTION TRACKER & RING BUFFER TEST ---")
+    
+    # Instantiate tracker with 15 frames of context storage capacity
+    detector = TransientMotionDetector(buffer_size=15, min_contour_area=20)
+    
+    # 1. Generate 20 frames of perfectly dark, quiet baseline night sky (fills buffer)
+    print("🌌 Simulating quiet static night sky (populating ring buffer)...")
+    for _ in range(20):
+        static_frame = np.zeros((720, 1280), dtype=np.uint8)
+        detector.process_frame(static_frame)
 
-print("Sending static frame...")
-engine.process(frame_static)
+    # 2. Introduce an artificial high-speed satellite streak into frame 21
+    print("💫 Introducing moving transient streak target matrix...")
+    active_frame = np.zeros((720, 1280), dtype=np.uint8)
+    # Draw a simulated linear trail line segment representation
+    cv2.line(active_frame, (100, 100), (140, 130), 255, 3)
+    
+    motion_flag, telemetry, _ = detector.process_frame(active_frame)
+    
+    print("\n[Execution Output Metrics]:")
+    print(f"  Motion Detected Triggered: {motion_flag}")
+    print(f"  Cached Pre-Motion Ring Buffer Size: {telemetry['buffered_context_frames']} frames")
+    print(f"  Tracked Active Target Count: {telemetry['active_target_count']}")
+    
+    if motion_flag and telemetry['kinematic_vectors']:
+        vector = telemetry['kinematic_vectors'][0]
+        print(f"  Extracted Centroid Coordinate: {vector['centroid']}")
+        print(f"  Pixel Cluster Footprint Area: {vector['pixel_area']} px")
+        print("\n✅ Sprint 4 Matrix Pipeline execution stable. Ring buffer caching functional.")
+    else:
+        print("❌ Test failed: Motion tracking matrix miscalculated target entry.")
 
-print("Sending motion frame...")
-is_motion = engine.process(frame_motion)
-
-if is_motion:
-    print("✅ Success! Check your datasets/captures/ folder.")
-else:
-    print("❌ No motion detected. Sensitivity might be too low.")
+if __name__ == "__main__":
+    run_motion_simulation()

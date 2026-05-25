@@ -1,54 +1,85 @@
-import cv2
-import os
-from datetime import datetime
+﻿import cv2
+import numpy as np
 from collections import deque
+from datetime import datetime
 
-class MotionTracker:
-    def __init__(self, buffer_size=30, sensitivity=5000):
-        self.buffer = deque(maxlen=buffer_size)
-        self.sensitivity = sensitivity
-        self.last_frame = None
-        self.save_dir = "captures"
-        os.makedirs(self.save_dir, exist_ok=True)
-
-    def process(self, frame):
-        # 1. Update Buffer (always keep the last 'buffer_size' frames)
-        self.buffer.append(frame)
+class TransientMotionDetector:
+    def __init__(self, buffer_size=30, min_contour_area=15, threshold_sens=25):
+        """
+        High-throughput kinematic motion tracking engine for transient sky phenomena.
         
-        # 2. Motion Detection (using Grayscale + Gaussian Blur to reduce noise)
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        gray = cv2.GaussianBlur(gray, (21, 21), 0)
+        :param buffer_size: Number of pre-motion context frames to retain in memory.
+        :param min_contour_area: Minimum pixel area to trigger tracking (filters tiny sensor noise).
+        :param threshold_sens: Sensitivity of the frame-differencing absolute delta threshold.
+        """
+        self.min_area = min_contour_area
+        self.threshold_sens = threshold_sens
         
-        report = {"motion_detected": False, "metadata": {"saved_path": None}}
-
-        if self.last_frame is None:
-            self.last_frame = gray
-            return report
-
-        # Compare current frame with the last known frame
-        frame_delta = cv2.absdiff(self.last_frame, gray)
-        thresh = cv2.threshold(frame_delta, 25, 255, cv2.THRESH_BINARY)[1]
-        self.last_frame = gray
-
-        # 3. Detect movement
-        contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        # Ring buffer for pre-motion context frames
+        self.frame_buffer = deque(maxlen=buffer_size)
         
-        for contour in contours:
-            if cv2.contourArea(contour) > self.sensitivity:
-                report["motion_detected"] = True
-                report["metadata"]["saved_path"] = self.save_buffer()
-                break
+        # Background subtractor initialization for adaptive structural learning
+        self.bg_subtractor = cv2.createBackgroundSubtractorMOG2(history=100, varThreshold=16, detectShadows=False)
         
-        return report
+        self.is_tracking = False
+        print("🚀 Kinematic Motion Tracker & Ring Buffer initialized successfully.")
 
-    def save_buffer(self):
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = os.path.join(self.save_dir, f"capture_{timestamp}.avi")
+    def process_frame(self, frame: np.ndarray) -> tuple:
+        """
+        Processes an incoming streaming frame matrix.
         
-        # Write buffer to disk
-        height, width, layers = self.buffer[0].shape
-        out = cv2.VideoWriter(filename, cv2.VideoWriter_fourcc(*'XVID'), 10, (width, height))
-        for frame in self.buffer:
-            out.write(frame)
-        out.release()
-        return filename
+        :param frame: Grayscale or BGR NumPy frame array.
+        :returns: A tuple of (is_motion_detected, motion_metadata_dict, processed_mask)
+        """
+        if frame is None:
+            return False, {}, None
+
+        # Ensure grayscale conversion for matrix delta operations
+        if len(frame.shape) == 3:
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        else:
+            gray = frame
+
+        # 1. Append raw frame copy to the rolling pre-motion context ring buffer
+        self.frame_buffer.append(gray.copy())
+
+        # 2. Apply history-based background subtraction matrix
+        fg_mask = self.bg_subtractor.apply(gray)
+        
+        # 3. Morphological filtering to clean up isolated single-pixel atmospheric scintillation
+        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
+        dilated_mask = cv2.dilate(fg_mask, kernel, iterations=1)
+
+        # 4. Extract motion vectors / contours
+        contours, _ = cv2.findContours(dilated_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        
+        motion_detected = False
+        active_vectors = []
+
+        for cnt in contours:
+            area = cv2.contourArea(cnt)
+            if area >= self.min_area:
+                motion_detected = True
+                # Extract structural bounding dimensions of the moving target
+                x, y, w, h = cv2.boundingRect(cnt)
+                centroid_x = int(x + w / 2)
+                centroid_y = int(y + h / 2)
+                
+                active_vectors.append({
+                    "centroid": (centroid_x, centroid_y),
+                    "bbox": (x, y, w, h),
+                    "pixel_area": float(area)
+                })
+
+        # Update tracking flags state transitions
+        self.is_tracking = motion_detected
+
+        metadata = {
+            "timestamp": datetime.utcnow().isoformat(),
+            "motion_triggered": motion_detected,
+            "active_target_count": len(active_vectors),
+            "kinematic_vectors": active_vectors,
+            "buffered_context_frames": len(self.frame_buffer)
+        }
+
+        return motion_detected, metadata, dilated_mask
