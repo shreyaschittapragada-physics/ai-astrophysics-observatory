@@ -1,0 +1,14 @@
+{
+  "mode": "automatic",
+  "camera_enabled": true,
+  "settings": {
+    "target_satellite": "ISS",
+    "observation_lat": 17.385,
+    "observation_lon": 78.486,
+    "observation_alt": 542.0
+  },
+  "calibration": {
+    "auto_sync_location": false,
+    "last_calibrated": "2026-05-23"
+  }
+}

@@ -1,42 +1,54 @@
 import cv2
-import numpy as np
 import os
-import datetime
+from datetime import datetime
+from collections import deque
 
 class MotionTracker:
-    def __init__(self, buffer_size=5):
-        self.buffer = []
-        self.prev_frame = None
-        self.buffer_size = buffer_size
+    def __init__(self, buffer_size=30, sensitivity=5000):
+        self.buffer = deque(maxlen=buffer_size)
+        self.sensitivity = sensitivity
+        self.last_frame = None
+        self.save_dir = "captures"
+        os.makedirs(self.save_dir, exist_ok=True)
 
     def process(self, frame):
-        # Update rolling buffer
+        # 1. Update Buffer (always keep the last 'buffer_size' frames)
         self.buffer.append(frame)
-        if len(self.buffer) > self.buffer_size:
-            self.buffer.pop(0)
-
-        # Initialize previous frame
-        if self.prev_frame is None:
-            self.prev_frame = frame
-            return False
-
-        # Calculate difference
-        diff = cv2.absdiff(self.prev_frame, frame)
-        _, thresh = cv2.threshold(diff, 30, 255, cv2.THRESH_BINARY)
         
-        # Determine if motion exists
-        motion_score = np.sum(thresh) / 255
-        is_motion = motion_score > 50 
+        # 2. Motion Detection (using Grayscale + Gaussian Blur to reduce noise)
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        gray = cv2.GaussianBlur(gray, (21, 21), 0)
         
-        if is_motion:
-            self.save_motion_sequence()
+        report = {"motion_detected": False, "metadata": {"saved_path": None}}
 
-        self.prev_frame = frame
-        return is_motion
+        if self.last_frame is None:
+            self.last_frame = gray
+            return report
 
-    def save_motion_sequence(self):
-        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        save_path = os.path.join("datasets", "captures", f"motion_{timestamp}")
-        os.makedirs(save_path, exist_ok=True)
-        for i, frame in enumerate(self.buffer):
-            cv2.imwrite(os.path.join(save_path, f"frame_{i}.jpg"), frame)
+        # Compare current frame with the last known frame
+        frame_delta = cv2.absdiff(self.last_frame, gray)
+        thresh = cv2.threshold(frame_delta, 25, 255, cv2.THRESH_BINARY)[1]
+        self.last_frame = gray
+
+        # 3. Detect movement
+        contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        
+        for contour in contours:
+            if cv2.contourArea(contour) > self.sensitivity:
+                report["motion_detected"] = True
+                report["metadata"]["saved_path"] = self.save_buffer()
+                break
+        
+        return report
+
+    def save_buffer(self):
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = os.path.join(self.save_dir, f"capture_{timestamp}.avi")
+        
+        # Write buffer to disk
+        height, width, layers = self.buffer[0].shape
+        out = cv2.VideoWriter(filename, cv2.VideoWriter_fourcc(*'XVID'), 10, (width, height))
+        for frame in self.buffer:
+            out.write(frame)
+        out.release()
+        return filename
