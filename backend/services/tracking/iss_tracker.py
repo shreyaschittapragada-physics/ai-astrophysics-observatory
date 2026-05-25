@@ -1,44 +1,115 @@
-﻿import os
-import math
+﻿import json
+import os
+import urllib.request
 from datetime import datetime
+from skyfield.api import Topos, load
+from skyfield.sgp4lib import EarthSatellite
+from sgp4.api import Satrec, WGS72
 
 class ISSTracker:
-    def __init__(self, lat=17.4933, lon=78.3404, alt=545):
-        """
-        Initializes the tracker with observer coordinates.
-        Defaults are configured for tracking observation passes.
-        """
-        self.lat = lat
-        self.lon = lon
-        self.alt = alt
-        self.data_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
-
-    def load_tle(self, filename="stations.tle"):
-        """Reads TLE data from the tracking data directory."""
-        tle_path = os.path.join(self.data_dir, filename)
-        if not os.path.exists(tle_path):
-            print(f"⚠️ TLE file not found at: {tle_path}")
-            return None
+    def __init__(self, config_path="config.json"):
+        base_dir = os.getcwd()
+        self.config_file = os.path.join(base_dir, config_path)
         
-        with open(tle_path, 'r') as f:
-            lines = [line.strip() for line in f.readlines() if line.strip()]
-        return lines
+        try:
+            with open(self.config_file, 'r', encoding='utf-8-sig') as f:
+                config = json.load(f)
+            print(f"🎯 Successfully loaded configurations from: {self.config_file}")
+        except Exception as e:
+            print(f"⚠️ Internal Reading Error: {str(e)}")
+            config = {}
 
-    def predict_next_pass(self, target_name="ISS"):
-        """
-        Predicts the next overhead pass for a target satellite.
-        Returns a mock pass window for orchestration testing if engine is local.
-        """
-        # In a full run, this parses the loaded TLE data line-by-line
-        print(f"📡 Calculating next pass windows for target: {target_name}...")
+        observer = config.get("observer", {})
+        tracking = config.get("tracking", {})
+
+        self.lat = observer.get("latitude", 17.4933)
+        self.lon = observer.get("longitude", 78.3404)
+        self.alt = observer.get("elevation_meters", 545.0)
+        self.target = tracking.get("selected_target", "ISS")
+        self.horizon_limit = tracking.get("horizon_cutoff_degrees", 10.0)
+
+        self.ts = load.timescale()
+        self.station_location = Topos(latitude_degrees=self.lat, longitude_degrees=self.lon, elevation_m=self.alt)
+
+    def _fetch_live_tle(self):
+        """Fetches active orbital parameters using robust direct float ingestion into SGP4"""
+        try:
+            url = 'https://celestrak.org/NORAD/elements/visual.txt'
+            req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+            with urllib.request.urlopen(req) as response:
+                lines = [line.decode('utf-8').strip() for line in response.readlines()]
+            
+            for line in lines:
+                if not line or "," not in line:
+                    continue
+                
+                parts = line.split(',')
+                name = parts[0]
+                catalog_id = parts[11] if len(parts) > 11 else ""
+                
+                if self.target.upper() in name.upper() or catalog_id == "25544":
+                    print(f"📡 Found live streaming OMM metrics for: {name}")
+                    
+                    epoch_str = parts[2]
+                    dt = datetime.strptime(epoch_str.split('.')[0], "%Y-%m-%dT%H:%M:%S")
+                    
+                    from math import radians
+                    import sgp4.api
+                    
+                    satrec = Satrec()
+                    
+                    # Convert Mean Motion from revolutions/day to radians/minute
+                    mean_motion_rad_min = float(parts[3]) * 2.0 * 3.141592653589793 / 1440.0
+                    
+                    # Exact 14-parameter positional block setup required by the sgp4 package
+                    satrec.sgp4init(
+                        WGS72,                                          # opsmode / gravity constants
+                        'i',                                            # src
+                        int(catalog_id if catalog_id.isdigit() else 25544), # satnum
+                        (dt - datetime(1949, 12, 31)).days,             # epoch days
+                        (dt.hour * 3600 + dt.minute * 60 + dt.second) / 86400.0, # epoch fraction
+                        float(parts[4]),                                # bstar drag
+                        0.0,                                            # ndot
+                        float(parts[9]),                                # ecco (eccentricity)
+                        radians(float(parts[7])),                       # argpo (perigee)
+                        radians(float(parts[5])),                       # inclo (inclination)
+                        radians(float(parts[8])),                       # mo (mean anomaly)
+                        mean_motion_rad_min,                            # no_unkozai (mean motion)
+                        radians(float(parts[6])),                       # nodeo (RAAN)
+                    )
+                    
+                    return EarthSatellite.from_satrec(satrec, self.ts)
+                    
+            raise ValueError(f"Target '{self.target}' not found in active dataset.")
+        except Exception as e:
+            print(f"⚠️ Live Stream Parse Failure: {e}. Slipping into fallback vector profiles.")
+            line1 = "1 25544U 98067A   26145.52083333  .00016717  00000-0  30142-3 0  9997"
+            line2 = "2 25544  51.6412  15.2341 0001470  89.3412  32.1147 15.49812345421115"
+            return EarthSatellite(line1, line2, self.target, self.ts)
+
+    def calculate_relative_position(self):
+        satellite = self._fetch_live_tle()
+        t = self.ts.now()
         
-        now = datetime.now()
-        start_time = now.strftime("%Y-%m-%d %H:%M:%S")
-        end_time = datetime.fromtimestamp(now.timestamp() + 600).strftime("%Y-%m-%d %H:%M:%S") # 10 min pass
+        difference = satellite - self.station_location
+        topocentric = difference.at(t)
+        alt, az, distance = topocentric.altaz()
+        
+        current_elevation = alt.degrees
+        current_azimuth = az.degrees
+        range_km = distance.km
+        
+        is_visible = bool(current_elevation >= self.horizon_limit)
+        horizon_status = "ABOVE HORIZON" if is_visible else "BELOW HORIZON"
         
         return {
-            "target_name": target_name,
-            "start_time": start_time,
-            "end_time": end_time,
-            "max_elevation": 68.5
+            "target": self.target,
+            "observer_coordinates": {"lat": self.lat, "lon": self.lon, "alt_m": self.alt},
+            "calculated_look_angles": {
+                "elevation_deg": round(current_elevation, 4),
+                "azimuth_deg": round(current_azimuth, 4),
+                "slant_range_km": round(range_km, 2)
+            },
+            "horizon_status": horizon_status,
+            "capture_authorized": is_visible
         }
