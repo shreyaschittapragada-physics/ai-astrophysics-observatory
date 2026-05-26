@@ -1,85 +1,75 @@
 ﻿import cv2
 import numpy as np
 from collections import deque
-from datetime import datetime
+import os
+import time
 
 class TransientMotionDetector:
-    def __init__(self, buffer_size=30, min_contour_area=15, threshold_sens=25):
-        """
-        High-throughput kinematic motion tracking engine for transient sky phenomena.
+    def __init__(self, buffer_size=30, min_contour_area=25):
+        # MOG2 Subtractor configured for highly variable atmospheric layouts
+        self.back_sub = cv2.createBackgroundSubtractorMOG2(history=300, varThreshold=25, detectShadows=False)
+        self.kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
         
-        :param buffer_size: Number of pre-motion context frames to retain in memory.
-        :param min_contour_area: Minimum pixel area to trigger tracking (filters tiny sensor noise).
-        :param threshold_sens: Sensitivity of the frame-differencing absolute delta threshold.
-        """
-        self.min_area = min_contour_area
-        self.threshold_sens = threshold_sens
-        
-        # Ring buffer for pre-motion context frames
+        # Volatile RAM rolling buffer to capture pre-motion event context frames
         self.frame_buffer = deque(maxlen=buffer_size)
-        
-        # Background subtractor initialization for adaptive structural learning
-        self.bg_subtractor = cv2.createBackgroundSubtractorMOG2(history=100, varThreshold=16, detectShadows=False)
-        
-        self.is_tracking = False
-        print("🚀 Kinematic Motion Tracker & Ring Buffer initialized successfully.")
+        self.min_contour_area = min_contour_area
+        self.cooldown_counter = 0
 
-    def process_frame(self, frame: np.ndarray) -> tuple:
-        """
-        Processes an incoming streaming frame matrix.
-        
-        :param frame: Grayscale or BGR NumPy frame array.
-        :returns: A tuple of (is_motion_detected, motion_metadata_dict, processed_mask)
-        """
+    def process_stream_frame(self, frame):
+        """Processes a continuous video frame input, tracking rolling temporal changes."""
         if frame is None:
             return False, {}, None
 
-        # Ensure grayscale conversion for matrix delta operations
+        # Convert to grayscale for raw pixel matrix calculations
         if len(frame.shape) == 3:
             gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         else:
-            gray = frame
+            gray = frame.copy()
 
-        # 1. Append raw frame copy to the rolling pre-motion context ring buffer
-        self.frame_buffer.append(gray.copy())
-
-        # 2. Apply history-based background subtraction matrix
-        fg_mask = self.bg_subtractor.apply(gray)
+        # Append current frame to volatile pre-motion context memory
+        self.frame_buffer.append(gray)
         
-        # 3. Morphological filtering to clean up isolated single-pixel atmospheric scintillation
-        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
-        dilated_mask = cv2.dilate(fg_mask, kernel, iterations=1)
-
-        # 4. Extract motion vectors / contours
-        contours, _ = cv2.findContours(dilated_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        # Apply temporal frame-differencing background subtraction
+        fg_mask = self.back_sub.apply(gray)
+        fg_mask = cv2.morphologyEx(fg_mask, cv2.MORPH_OPEN, self.kernel)
+        
+        contours, _ = cv2.findContours(fg_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         
         motion_detected = False
-        active_vectors = []
+        largest_area = 0
+        kinematic_vectors = []
 
         for cnt in contours:
             area = cv2.contourArea(cnt)
-            if area >= self.min_area:
+            if area > self.min_contour_area:
                 motion_detected = True
-                # Extract structural bounding dimensions of the moving target
-                x, y, w, h = cv2.boundingRect(cnt)
-                centroid_x = int(x + w / 2)
-                centroid_y = int(y + h / 2)
+                if area > largest_area:
+                    largest_area = area
                 
-                active_vectors.append({
-                    "centroid": (centroid_x, centroid_y),
+                x, y, w, h = cv2.boundingRect(cnt)
+                kinematic_vectors.append({
                     "bbox": (x, y, w, h),
-                    "pixel_area": float(area)
+                    "centroid": (int(x + w/2), int(y + h/2)),
+                    "area": area
                 })
 
-        # Update tracking flags state transitions
-        self.is_tracking = motion_detected
+        # Provide a safe structural default if no coordinates are isolated
+        if not kinematic_vectors:
+            kinematic_vectors.append({"bbox": (0, 0, 1, 1), "centroid": (0, 0), "area": 0})
 
         metadata = {
-            "timestamp": datetime.utcnow().isoformat(),
-            "motion_triggered": motion_detected,
-            "active_target_count": len(active_vectors),
-            "kinematic_vectors": active_vectors,
-            "buffered_context_frames": len(self.frame_buffer)
+            "active_target_count": len(kinematic_vectors) if motion_detected else 0,
+            "kinematic_vectors": kinematic_vectors,
+            "largest_contour_area": largest_area,
+            "timestamp": time.time()
         }
 
-        return motion_detected, metadata, dilated_mask
+        return motion_detected, metadata, fg_mask
+
+    def dump_context_sequence(self, event_id: str):
+        """Dumps the pre-motion volatile memory buffer to disk when an anomaly triggers."""
+        save_path = os.path.join("datasets", "captures", f"event_{event_id}")
+        os.makedirs(save_path, exist_ok=True)
+        for i, f in enumerate(self.frame_buffer):
+            cv2.imwrite(os.path.join(save_path, f"frame_{i:02d}.jpg"), f)
+        return save_path
