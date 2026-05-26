@@ -6,28 +6,26 @@ from backend.services.tracking.router import router as tracking_router
 from backend.services.tracking.router import tracker
 
 async def TLE_background_worker():
-    """Background loop that updates satellite vectors every hour without blocking traffic"""
     while True:
         try:
             if tracker:
-                tracker.fetch_and_cache_tle()
+                if hasattr(tracker, '_ensure_data_freshness'):
+                    tracker._ensure_data_freshness()
+                if hasattr(tracker, 'load_catalog'):
+                    tracker.load_catalog()
+                    print("✓ Satellite catalog background refresh complete.")
         except Exception as e:
             print(f"⚠️ Error running background TLE refresh: {e}")
-        # Sleep for 1 hour (3600 seconds) before checking Celestrak again
         await asyncio.sleep(3600)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Handles server startup and shutdown background routines securely"""
-    # Startup: Launch the worker task daemon
     worker_task = asyncio.create_task(TLE_background_worker())
     yield
-    # Shutdown: Clean up task allocations on exit
     worker_task.cancel()
 
 app = FastAPI(
     title="Project AstroEdge - AI Observatory Core",
-    description="Asynchronous backend API server for autonomous satellite tracking with background worker caching.",
     version="1.1.0",
     lifespan=lifespan
 )
@@ -44,12 +42,14 @@ app.include_router(tracking_router)
 
 @app.get("/")
 async def root_status():
+    cv_val = getattr(tracker, 'cv', "NOT_INITIALIZED")
     return {
         "status": "ONLINE",
         "platform": "Project AstroEdge Core Engine",
-        "version": "1.1.0"
+        "version": "1.1.0",
+        "cv": cv_val
     }
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("backend.main:app", host="127.0.0.1", port=8000, reload=True)
+    uvicorn.run("backend.main:app", host="0.0.0.0", port=8000, reload=False)

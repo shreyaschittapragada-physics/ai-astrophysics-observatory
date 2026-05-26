@@ -6,11 +6,13 @@ from backend.services.tracking.iss_tracker import ISSTracker
 from backend.services.cv_factory import CVObservationFactory
 from backend.services.database.db_manager import DatabaseManager
 
+# 1. This is the line your system is looking for!
 router = APIRouter(
     prefix="/api/v1/tracking",
     tags=["Orbital Tracking & Computer Vision"]
 )
 
+# 2. Safely initialize your tracking engines
 try:
     tracker = ISSTracker()
     cv_factory = CVObservationFactory()
@@ -21,6 +23,7 @@ except Exception as e:
     cv_factory = None
     db = None
 
+# 3. Your Endpoints
 @router.get("/live")
 async def get_live_telemetry():
     """Returns a unified hardware-telemetry payload combining SGP4 look-angles and CV metrics."""
@@ -28,7 +31,12 @@ async def get_live_telemetry():
         raise HTTPException(status_code=500, detail="Core processing engines uninitialized.")
     
     try:
-        telemetry = tracker.calculate_relative_position()
+        # Uses the correct method name from your ISSTracker class
+        telemetry = tracker.get_position("ISS (ZARYA)")
+        
+        if telemetry is None:
+            telemetry = {"status": "Target not found in active catalog"}
+            
         image_path = os.path.join("datasets", "sky_images", "sky.jpg")
         
         if os.path.exists(image_path):
@@ -51,10 +59,7 @@ async def get_live_telemetry():
 
 @router.get("/history")
 async def get_detection_history():
-    """
-    Fetches all archived high-confidence tracking logs from SQLite.
-    This feeds the historical data table on the dashboard UI.
-    """
+    """Fetches all archived high-confidence tracking logs from SQLite."""
     if not db:
         raise HTTPException(status_code=500, detail="Database engine uninitialized.")
     
@@ -77,11 +82,15 @@ async def get_detection_history():
 
 @router.get("/predict")
 async def get_pass_predictions():
+    """Returns orbital pass prediction metrics safely using default fallbacks if properties are absent."""
     if not tracker:
         raise HTTPException(status_code=500, detail="Tracking engine is uninitialized.")
     return {
-        "target": tracker.target,
-        "observer_station": {"lat": tracker.lat, "lon": tracker.lon},
+        "target": getattr(tracker, 'target', "ISS (ZARYA)"),
+        "observer_station": {
+            "lat": getattr(tracker, 'lat', 0.0), 
+            "lon": getattr(tracker, 'lon', 0.0)
+        },
         "status": "Pass prediction scanning logic active",
         "upcoming_passes": []
     }
