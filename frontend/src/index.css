@@ -1,0 +1,27 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --bg: #0B0F19;
+  --border: #1e293b;
+  --code-bg: #0f172a;
+}
+
+body {
+  margin: 0;
+  background-color: var(--bg);
+  color: #f8fafc;
+  font-family: system-ui, -apple-system, sans-serif;
+}
+
+#root {
+  width: 1126px;
+  max-width: 100%;
+  margin: 0 auto;
+  border-inline: 1px solid var(--border);
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
+}

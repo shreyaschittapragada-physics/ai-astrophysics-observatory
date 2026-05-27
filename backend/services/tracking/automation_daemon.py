@@ -68,7 +68,8 @@ class ObservatoryAutomationDaemon:
                     self.current_state = "ARMED"
                     print(f"🚨 [STATE: ARMED] {target} incoming. Pre-allocating context frame arrays...")
                     for _ in range(10):
-                        self.tracker.process_frame(np.zeros((500, 500), dtype=np.uint8))
+                        # SUCCESS INTEGRATION FIXED: Changed to process_stream_frame
+                        self.tracker.process_stream_frame(np.zeros((500, 500), dtype=np.uint8))
                 
                 # 2. State Shift: RECORDING (Live CV Stream Processing)
                 elif aos <= now <= los:
@@ -80,7 +81,8 @@ class ObservatoryAutomationDaemon:
                     simulated_sky_frame = np.zeros((500, 500), dtype=np.uint8)
                     cv2.line(simulated_sky_frame, (10, 200), (490, 210), 255, 2)
                     
-                    motion_detected, metadata, processed_mask = self.tracker.process_frame(simulated_sky_frame)
+                    # SUCCESS INTEGRATION FIXED: Changed to process_stream_frame
+                    motion_detected, metadata, processed_mask = self.tracker.process_stream_frame(simulated_sky_frame)
                     
                     if motion_detected:
                         analysis = self.intelligence_filter.evaluate_motion_profile(processed_mask, metadata)

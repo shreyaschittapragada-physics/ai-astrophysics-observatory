@@ -36,3 +36,18 @@ class DatabaseManager:
             """, (timestamp, classification, confidence, lines, aspect_ratio, frame_path))
             conn.commit()
         print(f"💾 Database Layer: Saved verified entry as [{classification}] with {confidence*100:.1f}% confidence.")
+
+    def fetch_all_logs(self):
+        """
+        ADDITION: Fetches all tracked execution logs from database storage.
+        Resolves endpoint dependency execution errors in tracking/router.py.
+        """
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT id, timestamp, classification, confidence, 
+                       line_segments_detected, target_aspect_ratio, frame_path 
+                FROM detection_events 
+                ORDER BY timestamp DESC
+            """)
+            return cursor.fetchall()

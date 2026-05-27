@@ -26,3 +26,27 @@ __pycache__/
 .venv/
 venv/
 ENV/
+
+# --- CRITICAL MISSING FRONTIER ---
+# Frontend dependency matrix (Crucial)
+node_modules/
+dist/
+build/
+
+# --- EXTRA PYTHON COMPONENT PROTECTION ---
+# Jupyter Notebook checkpoints
+.ipynb_checkpoints/
+
+# --- SYSTEM CLUTTER ---
+# OS-specific metadata files
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# IDE and Project workspaces
+.idea/
+.vscode/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
